@@ -1,5 +1,12 @@
 package mapreduce
 
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
+)
+
 func doReduce(
 	jobName string, // the name of the whole MapReduce job
 	reduceTask int, // which reduce task this is
@@ -44,4 +51,64 @@ func doReduce(
 	//
 	// Your code here (Part I).
 	//
+
+	kvMap := map[string][]KeyValue{}
+
+	for m := 0; m < nMap; m++ {
+		fileName := reduceName(jobName, m, reduceTask)
+		f, err := os.Open(fileName)
+		if err != nil {
+			panic(fmt.Sprintf("open: %s", err))
+		}
+		decoder := json.NewDecoder(f)
+		var kv KeyValue
+		for decoder.More() {
+			err := decoder.Decode(&kv)
+			if err != nil {
+				panic(fmt.Sprintf("decode: %s", err))
+			}
+			var keyGroup []KeyValue
+			if v, ok := kvMap[kv.Key]; ok {
+				keyGroup = v
+			} else {
+				keyGroup = []KeyValue{}
+			}
+
+			kvMap[kv.Key] = append(keyGroup, kv)
+		}
+	}
+
+	f, err := os.OpenFile(outFile, os.O_RDWR|os.O_CREATE, 0755)
+	if err != nil {
+		panic(fmt.Sprintf("open file: %s", err))
+	}
+	defer f.Close()
+	encoder := json.NewEncoder(f)
+
+	for key, keyGroup := range kvMap {
+		sort.Sort(byKey(keyGroup))
+		kv := KeyValue{
+			Key:   key,
+			Value: reduceF(key, values(keyGroup)),
+		}
+		err := encoder.Encode(&kv)
+		if err != nil {
+			panic(fmt.Sprintf("encode: %s", err))
+		}
+
+	}
 }
+
+func values(keyValues []KeyValue) []string {
+	values := make([]string, len(keyValues))
+	for i, kv := range keyValues {
+		values[i] = kv.Value
+	}
+	return values
+}
+
+type byKey []KeyValue
+
+func (a byKey) Len() int           { return len(a) }
+func (a byKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a byKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
