@@ -1,6 +1,9 @@
 package mapreduce
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 //
 // schedule() starts and waits for all tasks in the given phase (mapPhase
@@ -30,5 +33,74 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 	//
 	// Your code here (Part III, Part IV).
 	//
+
+	tasksCh := make(chan DoTaskArgs, ntasks)
+	for i := 0; i < ntasks; i++ {
+		arg := DoTaskArgs{
+			JobName:       jobName,
+			Phase:         phase,
+			TaskNumber:    i,
+			NumOtherPhase: n_other,
+		}
+
+		switch phase {
+		case mapPhase:
+			arg.File = mapFiles[i]
+		}
+
+		tasksCh <- arg
+	}
+
+	workerCh := make(chan string)
+	doneCh := make(chan struct{})
+	defer close(doneCh)
+	go func() {
+		for {
+			select {
+			case <-doneCh:
+				return
+			case worker := <-registerChan:
+				workerCh <- worker
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+
+loop:
+	for {
+		worker := <-workerCh
+
+		// This is gross, but it gets the job done: Try to get a task. If none are
+		// in the queue, wait until all goroutines spawned by this loop finish. If
+		// there are still no more tasks, we are done.
+		var arg DoTaskArgs
+		select {
+		case arg = <-tasksCh:
+		default:
+			wg.Wait()
+			select {
+			case arg = <-tasksCh:
+			default:
+				break loop
+			}
+		}
+		wg.Add(1)
+		go func(worker string, arg DoTaskArgs) {
+			defer func() {
+				select {
+				case workerCh <- worker:
+				case <-doneCh:
+				}
+			}()
+
+			defer wg.Done()
+
+			if !call(worker, "Worker.DoTask", arg, nil) {
+				tasksCh <- arg
+			}
+		}(worker, arg)
+	}
+
 	fmt.Printf("Schedule: %v done\n", phase)
 }
