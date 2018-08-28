@@ -30,9 +30,16 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 
 	// All ntasks tasks have to be scheduled on workers. Once all tasks
 	// have completed successfully, schedule() should return.
-	//
-	// Your code here (Part III, Part IV).
-	//
+
+	// Note that this implementation is more complex than simply starting ntasks
+	// goroutines where each is responsible for ensuring that it's task completes.
+	// That method would work, but unfortunately would break very quickly when the
+	// number of tasks is much greater than the number of workers e.g. there are a
+	// million tasks and only a handful of workers. In that case a goroutine per
+	// task would spawn one million goroutines.
+
+	// Instead, this implementation will only spawn a goroutine when a worker is
+	// available.
 
 	tasksCh := make(chan DoTaskArgs, ntasks)
 	for i := 0; i < ntasks; i++ {
@@ -51,25 +58,12 @@ func schedule(jobName string, mapFiles []string, nReduce int, phase jobPhase, re
 		tasksCh <- arg
 	}
 
-	workerCh := make(chan string)
-	doneCh := make(chan struct{})
-	defer close(doneCh)
-	go func() {
-		for {
-			select {
-			case <-doneCh:
-				return
-			case worker := <-registerChan:
-				workerCh <- worker
-			}
-		}
-	}()
-
 	var wg sync.WaitGroup
+	doneCh := make(chan struct{})
 
 loop:
 	for {
-		worker := <-workerCh
+		worker := <-registerChan
 
 		// This is gross, but it gets the job done: Try to get a task. If none are
 		// in the queue, wait until all goroutines spawned by this loop finish. If
@@ -89,7 +83,7 @@ loop:
 		go func(worker string, arg DoTaskArgs) {
 			defer func() {
 				select {
-				case workerCh <- worker:
+				case registerChan <- worker:
 				case <-doneCh:
 				}
 			}()
